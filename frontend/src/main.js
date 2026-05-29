@@ -84,15 +84,13 @@ function setupEventListeners() {
 
   // Clear all
   clearBtn.addEventListener("click", async () => {
-    if (confirm("确定要清除所有未固定的记录吗？")) {
-      try {
-        await ClipboardService.ClearAll();
-        await loadItems();
-        await loadStats();
-        showToast("已清除所有未固定记录");
-      } catch (err) {
-        console.error("Failed to clear:", err);
-      }
+    try {
+      await ClipboardService.ClearAll();
+      await loadItems();
+      await loadStats();
+      showToast("已清除所有未固定记录");
+    } catch (err) {
+      console.error("Failed to clear:", err);
     }
   });
 
