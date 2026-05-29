@@ -137,6 +137,19 @@ func (s *Store) ListByGroup(groupName string, limit int) ([]ClipboardItem, error
 	return scanItems(rows)
 }
 
+// ListByTimeRange returns items within a time range.
+func (s *Store) ListByTimeRange(startTime, endTime string, limit int) ([]ClipboardItem, error) {
+	rows, err := s.db.Query(
+		"SELECT id, content, type, COALESCE(category,''), created_at, pinned, COALESCE(group_name,'') FROM clipboard_items WHERE created_at >= ? AND created_at < ? ORDER BY pinned DESC, created_at DESC LIMIT ?",
+		startTime, endTime, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanItems(rows)
+}
+
 // ListGroups returns all distinct group names.
 func (s *Store) ListGroups() ([]string, error) {
 	rows, err := s.db.Query("SELECT DISTINCT group_name FROM clipboard_items WHERE group_name != '' ORDER BY group_name")

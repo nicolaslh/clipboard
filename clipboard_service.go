@@ -158,6 +158,46 @@ func (s *ClipboardService) FilterByCategory(category string) ([]ClipboardItem, e
 	return items, nil
 }
 
+// FilterByDate returns items from a specific date (YYYY-MM-DD format).
+func (s *ClipboardService) FilterByDate(dateStr string) ([]ClipboardItem, error) {
+	loc := time.Now().Location()
+	start, err := time.ParseInLocation("2006-01-02", dateStr, loc)
+	if err != nil {
+		return nil, err
+	}
+	end := start.AddDate(0, 0, 1)
+	items, err := s.store.ListByTimeRange(start.Format(time.RFC3339), end.Format(time.RFC3339), 100)
+	if err != nil {
+		return nil, err
+	}
+	if items == nil {
+		items = []ClipboardItem{}
+	}
+	return items, nil
+}
+
+// FilterByDateRange returns items between two dates (YYYY-MM-DD format).
+func (s *ClipboardService) FilterByDateRange(startDate, endDate string) ([]ClipboardItem, error) {
+	loc := time.Now().Location()
+	start, err := time.ParseInLocation("2006-01-02", startDate, loc)
+	if err != nil {
+		return nil, err
+	}
+	end, err := time.ParseInLocation("2006-01-02", endDate, loc)
+	if err != nil {
+		return nil, err
+	}
+	end = end.AddDate(0, 0, 1) // include the end date fully
+	items, err := s.store.ListByTimeRange(start.Format(time.RFC3339), end.Format(time.RFC3339), 100)
+	if err != nil {
+		return nil, err
+	}
+	if items == nil {
+		items = []ClipboardItem{}
+	}
+	return items, nil
+}
+
 // GetGroups returns all snippet group names.
 func (s *ClipboardService) GetGroups() ([]string, error) {
 	groups, err := s.store.ListGroups()

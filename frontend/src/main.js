@@ -9,6 +9,7 @@ let currentFilter = "all";
 const listEl = document.getElementById("clipboard-list");
 const emptyEl = document.getElementById("empty-state");
 const searchInput = document.getElementById("search-input");
+const datePicker = document.getElementById("date-picker");
 const statsEl = document.getElementById("stats");
 const clearBtn = document.getElementById("btn-clear");
 const filterBar = document.getElementById("filter-bar");
@@ -127,8 +128,25 @@ function setupEventListeners() {
   searchInput.addEventListener("input", (e) => {
     clearTimeout(searchTimeout);
     searchTimeout = setTimeout(() => {
+      datePicker.value = ""; // clear date when typing
       searchItems(e.target.value);
     }, 300);
+  });
+
+  // Date picker
+  datePicker.addEventListener("change", async (e) => {
+    const date = e.target.value;
+    if (!date) {
+      await loadItems();
+      return;
+    }
+    searchInput.value = ""; // clear text search when picking date
+    try {
+      const results = await ClipboardService.FilterByDate(date);
+      renderItems(results);
+    } catch (err) {
+      console.error("Failed to filter by date:", err);
+    }
   });
 
   // Filter buttons
@@ -194,6 +212,7 @@ function setupEventListeners() {
         settingsOverlay.style.display = "none";
       } else {
         searchInput.value = "";
+        datePicker.value = "";
         searchInput.blur();
         currentFilter = "all";
         filterBar.querySelectorAll(".filter-btn").forEach((b) => b.classList.remove("active"));
