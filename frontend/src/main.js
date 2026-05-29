@@ -1,5 +1,5 @@
 import { Events } from "@wailsio/runtime";
-import { ClipboardService } from "./bindings/github.com/nic/clipboard";
+import { ClipboardService } from "../bindings/github.com/nic/clipboard";
 
 let items = [];
 let searchTimeout = null;
