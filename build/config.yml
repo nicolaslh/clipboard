@@ -1,0 +1,35 @@
+version: '3'
+
+info:
+  companyName: "nic"
+  productName: "Clipboard Manager"
+  productIdentifier: "com.nic.clipboard"
+  description: "A clipboard history manager"
+  copyright: "(c) 2025, nic"
+  version: "0.1.0"
+
+dev_mode:
+  root_path: .
+  log_level: warn
+  debounce: 1000
+  ignore:
+    dir:
+      - .git
+      - node_modules
+      - frontend
+      - bin
+    file:
+      - .DS_Store
+      - .gitignore
+      - .gitkeep
+      - "*_test.go"
+    watched_extension:
+      - "*.go"
+    git_ignore: true
+  executes:
+    - cmd: wails3 task common:dev:frontend
+      type: background
+    - cmd: go build -tags dev -o ./bin/clipboard .
+      type: blocking
+    - cmd: ./bin/clipboard
+      type: primary

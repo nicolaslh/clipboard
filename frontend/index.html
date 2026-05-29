@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Clipboard Manager</title>
+    <link rel="stylesheet" href="/src/style.css">
+</head>
+<body>
+    <div id="app">
+        <header id="titlebar">
+            <h1>📋 剪切板管理器</h1>
+            <div class="header-actions">
+                <button id="btn-clear" class="btn btn-danger" title="清除所有未固定项">清除</button>
+            </div>
+        </header>
+
+        <div class="search-bar">
+            <input type="text" id="search-input" placeholder="搜索剪切板历史..." autocomplete="off">
+        </div>
+
+        <div class="stats" id="stats"></div>
+
+        <main id="clipboard-list" class="clipboard-list">
+            <!-- Items will be rendered here -->
+        </main>
+
+        <div id="empty-state" class="empty-state" style="display: none;">
+            <p>📭 暂无剪切板记录</p>
+            <p class="hint">复制一些内容试试吧</p>
+        </div>
+    </div>
+
+    <script type="module" src="/src/main.js"></script>
+</body>
+</html>

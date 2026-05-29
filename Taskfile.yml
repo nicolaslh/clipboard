@@ -1,0 +1,55 @@
+version: '3'
+
+vars:
+  APP_NAME: "clipboard"
+  BIN_DIR: "bin"
+
+tasks:
+  default:
+    cmds:
+      - task: build
+
+  install:frontend:deps:
+    dir: frontend
+    sources:
+      - package.json
+    generates:
+      - node_modules/.package-lock.json
+    cmds:
+      - npm install
+
+  build:frontend:
+    dir: frontend
+    deps:
+      - install:frontend:deps
+    cmds:
+      - npm run build
+
+  common:dev:frontend:
+    dir: frontend
+    deps:
+      - install:frontend:deps
+    cmds:
+      - npx vite --port {{.WAILS_VITE_PORT}} --strictPort
+    env:
+      WAILS_VITE_PORT: '{{.WAILS_VITE_PORT | default "9245"}}'
+
+  build:
+    deps:
+      - build:frontend
+    cmds:
+      - go build -tags production -o {{.BIN_DIR}}/{{.APP_NAME}} .
+
+  run:
+    cmds:
+      - ./{{.BIN_DIR}}/{{.APP_NAME}}
+
+  dev:
+    cmds:
+      - wails3 dev
+
+  clean:
+    cmds:
+      - rm -rf {{.BIN_DIR}}
+      - rm -rf frontend/dist
+      - rm -rf frontend/node_modules
