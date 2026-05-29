@@ -52,10 +52,13 @@ function renderItems(itemList) {
 
   listEl.innerHTML = itemList
     .map(
-      (item) => `
+      (item) => {
+        const isLong = item.content.length > 200;
+        return `
     <div class="clipboard-item ${item.pinned ? "pinned" : ""}" data-id="${item.id}">
       <div class="item-content" onclick="window.__copyItem(${item.id}, ${JSON.stringify(item.content).replace(/"/g, "&quot;")})">
-        <div class="item-text">${escapeHtml(item.content)}</div>
+        <div class="item-text ${isLong ? "truncated" : ""}">${escapeHtml(isLong ? item.content.slice(0, 200) : item.content)}</div>
+        ${isLong ? `<button class="preview-btn" onclick="event.stopPropagation(); window.__preview(${item.id})">展开预览</button>` : ""}
         <div class="item-meta">
           <span>${formatTime(item.createdAt)}</span>
           <span>·</span>
@@ -67,7 +70,8 @@ function renderItems(itemList) {
         <button class="delete-btn" onclick="window.__deleteItem(${item.id})" title="删除">🗑️</button>
       </div>
     </div>
-  `
+  `;
+      }
     )
     .join("");
 }
@@ -83,16 +87,43 @@ function setupEventListeners() {
   });
 
   // Clear all
-  clearBtn.addEventListener("click", async () => {
-    try {
-      await ClipboardService.ClearAll();
-      await loadItems();
-      await loadStats();
-      showToast("已清除所有未固定记录");
-    } catch (err) {
-      console.error("Failed to clear:", err);
+  clearBtn.addEventListener("click", () => {
+    // Show inline confirm
+    if (clearBtn.dataset.confirming === "true") {
+      return;
     }
+    clearBtn.dataset.confirming = "true";
+    clearBtn.textContent = "确认清除？";
+    clearBtn.classList.add("btn-confirm");
+
+    const timer = setTimeout(() => {
+      resetClearBtn();
+    }, 3000);
+
+    clearBtn._confirmHandler = async () => {
+      clearTimeout(timer);
+      try {
+        await ClipboardService.ClearAll();
+        await loadItems();
+        await loadStats();
+        showToast("已清除所有未固定记录");
+      } catch (err) {
+        console.error("Failed to clear:", err);
+      }
+      resetClearBtn();
+    };
+    clearBtn.addEventListener("click", clearBtn._confirmHandler, { once: true });
   });
+
+  function resetClearBtn() {
+    clearBtn.dataset.confirming = "false";
+    clearBtn.textContent = "清除";
+    clearBtn.classList.remove("btn-confirm");
+    if (clearBtn._confirmHandler) {
+      clearBtn.removeEventListener("click", clearBtn._confirmHandler);
+      clearBtn._confirmHandler = null;
+    }
+  }
 
   // Keyboard shortcut
   document.addEventListener("keydown", (e) => {
@@ -158,6 +189,32 @@ window.__deleteItem = async (id) => {
   } catch (err) {
     console.error("Failed to delete:", err);
   }
+};
+
+// Preview item
+window.__preview = (id) => {
+  const item = items.find((i) => i.id === id);
+  if (!item) return;
+
+  const overlay = document.createElement("div");
+  overlay.className = "preview-overlay";
+  overlay.onclick = (e) => {
+    if (e.target === overlay) overlay.remove();
+  };
+
+  overlay.innerHTML = `
+    <div class="preview-modal">
+      <div class="preview-header">
+        <span class="preview-meta">${item.content.length} 字符 · ${formatTime(item.createdAt)}</span>
+        <button class="preview-close" onclick="this.closest('.preview-overlay').remove()">✕</button>
+      </div>
+      <pre class="preview-content">${escapeHtml(item.content)}</pre>
+      <div class="preview-actions">
+        <button onclick="window.__copyItem(${item.id}, ${JSON.stringify(item.content).replace(/"/g, "&quot;")}); this.closest('.preview-overlay').remove();">复制</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
 };
 
 // Utility: escape HTML
