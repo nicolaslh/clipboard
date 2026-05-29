@@ -11,9 +11,10 @@ import (
 
 // ClipboardService monitors the system clipboard and provides management APIs.
 type ClipboardService struct {
-	store  *Store
-	cancel context.CancelFunc
-	app    *application.App
+	store       *Store
+	cancel      context.CancelFunc
+	app         *application.App
+	lastContent string
 }
 
 // NewClipboardService creates a new ClipboardService.
@@ -32,10 +33,13 @@ func (s *ClipboardService) ServiceStartup(ctx context.Context, options applicati
 
 	s.app = application.Get()
 
-	// Start monitoring clipboard in background
+	// Read current clipboard content as baseline
+	s.lastContent = string(clipboard.Read(clipboard.FmtText))
+
+	// Start polling clipboard in background
 	monitorCtx, cancel := context.WithCancel(ctx)
 	s.cancel = cancel
-	go s.watchClipboard(monitorCtx)
+	go s.pollClipboard(monitorCtx)
 
 	return nil
 }
@@ -48,26 +52,32 @@ func (s *ClipboardService) ServiceShutdown() error {
 	return s.store.Close()
 }
 
-// watchClipboard polls the clipboard for changes.
-func (s *ClipboardService) watchClipboard(ctx context.Context) {
-	textCh := clipboard.Watch(ctx, clipboard.FmtText)
+// pollClipboard checks the clipboard every 500ms for changes.
+func (s *ClipboardService) pollClipboard(ctx context.Context) {
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case data := <-textCh:
+		case <-ticker.C:
+			data := clipboard.Read(clipboard.FmtText)
 			if len(data) == 0 {
 				continue
 			}
 			content := string(data)
+			if content == s.lastContent {
+				continue
+			}
+			s.lastContent = content
+
 			item, err := s.store.Save(content, "text")
 			if err != nil {
 				slog.Error("failed to save clipboard item", "error", err)
 				continue
 			}
 			if item != nil {
-				// Emit event to frontend
 				s.app.Event.Emit("clipboard:new", item)
 			}
 		}
@@ -121,6 +131,7 @@ func (s *ClipboardService) ClearAll() error {
 
 // CopyToClipboard writes content back to the system clipboard.
 func (s *ClipboardService) CopyToClipboard(content string) {
+	s.lastContent = content // Prevent re-capturing our own write
 	clipboard.Write(clipboard.FmtText, []byte(content))
 }
 
@@ -138,16 +149,8 @@ func (s *ClipboardService) GetStats() (map[string]interface{}, error) {
 		return nil, err
 	}
 
-	var oldest string
-	err = s.store.db.QueryRow("SELECT COALESCE(MIN(created_at), '') FROM clipboard_items").Scan(&oldest)
-	if err != nil {
-		return nil, err
-	}
-
 	return map[string]interface{}{
-		"total":     total,
-		"pinned":    pinned,
-		"oldest":    oldest,
-		"queryTime": time.Now().Format(time.RFC3339),
+		"total":  total,
+		"pinned": pinned,
 	}, nil
 }
