@@ -46,17 +46,19 @@ func NewStore(dbPath string) (*Store, error) {
 		);
 		CREATE INDEX IF NOT EXISTS idx_clipboard_items_created_at ON clipboard_items(created_at DESC);
 		CREATE INDEX IF NOT EXISTS idx_clipboard_items_content ON clipboard_items(content);
-		CREATE INDEX IF NOT EXISTS idx_clipboard_items_category ON clipboard_items(category);
-		CREATE INDEX IF NOT EXISTS idx_clipboard_items_group ON clipboard_items(group_name);
 	`)
 	if err != nil {
 		return nil, err
 	}
 
-	// Migrate: add category column if missing
+	// Migrate: add category column if missing (ignore error if already exists)
 	db.Exec("ALTER TABLE clipboard_items ADD COLUMN category TEXT NOT NULL DEFAULT ''")
-	// Migrate: add group_name column if missing
+	// Migrate: add group_name column if missing (ignore error if already exists)
 	db.Exec("ALTER TABLE clipboard_items ADD COLUMN group_name TEXT NOT NULL DEFAULT ''")
+
+	// Create indexes that depend on migrated columns
+	db.Exec("CREATE INDEX IF NOT EXISTS idx_clipboard_items_category ON clipboard_items(category)")
+	db.Exec("CREATE INDEX IF NOT EXISTS idx_clipboard_items_group ON clipboard_items(group_name)")
 
 	return &Store{db: db}, nil
 }
