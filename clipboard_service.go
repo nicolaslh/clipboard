@@ -11,16 +11,18 @@ import (
 
 // ClipboardService monitors the system clipboard and provides management APIs.
 type ClipboardService struct {
-	store       *Store
-	cancel      context.CancelFunc
-	app         *application.App
-	lastContent string
+	store         *Store
+	cancel        context.CancelFunc
+	app           *application.App
+	lastContent   string
+	retentionDays int
 }
 
 // NewClipboardService creates a new ClipboardService.
 func NewClipboardService(store *Store) *ClipboardService {
 	return &ClipboardService{
-		store: store,
+		store:         store,
+		retentionDays: 30, // default 30 days retention
 	}
 }
 
@@ -36,10 +38,19 @@ func (s *ClipboardService) ServiceStartup(ctx context.Context, options applicati
 	// Read current clipboard content as baseline
 	s.lastContent = string(clipboard.Read(clipboard.FmtText))
 
+	// Clean expired items on startup
+	deleted, err := s.store.CleanExpired(s.retentionDays)
+	if err != nil {
+		slog.Error("failed to clean expired items", "error", err)
+	} else if deleted > 0 {
+		slog.Info("cleaned expired clipboard items", "count", deleted)
+	}
+
 	// Start polling clipboard in background
 	monitorCtx, cancel := context.WithCancel(ctx)
 	s.cancel = cancel
 	go s.pollClipboard(monitorCtx)
+	go s.periodicCleanup(monitorCtx)
 
 	return nil
 }
@@ -84,6 +95,27 @@ func (s *ClipboardService) pollClipboard(ctx context.Context) {
 	}
 }
 
+// periodicCleanup runs every hour to remove expired items.
+func (s *ClipboardService) periodicCleanup(ctx context.Context) {
+	ticker := time.NewTicker(1 * time.Hour)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			deleted, err := s.store.CleanExpired(s.retentionDays)
+			if err != nil {
+				slog.Error("periodic cleanup failed", "error", err)
+			} else if deleted > 0 {
+				slog.Info("periodic cleanup removed items", "count", deleted)
+				s.app.Event.Emit("clipboard:cleaned", deleted)
+			}
+		}
+	}
+}
+
 // GetItems returns clipboard items with pagination.
 func (s *ClipboardService) GetItems(limit, offset int) ([]ClipboardItem, error) {
 	if limit <= 0 {
@@ -114,6 +146,47 @@ func (s *ClipboardService) SearchItems(query string) ([]ClipboardItem, error) {
 	return items, nil
 }
 
+// FilterByCategory returns items of a specific category.
+func (s *ClipboardService) FilterByCategory(category string) ([]ClipboardItem, error) {
+	items, err := s.store.ListByCategory(category, 50)
+	if err != nil {
+		return nil, err
+	}
+	if items == nil {
+		items = []ClipboardItem{}
+	}
+	return items, nil
+}
+
+// GetGroups returns all snippet group names.
+func (s *ClipboardService) GetGroups() ([]string, error) {
+	groups, err := s.store.ListGroups()
+	if err != nil {
+		return nil, err
+	}
+	if groups == nil {
+		groups = []string{}
+	}
+	return groups, nil
+}
+
+// GetGroupItems returns items in a specific group.
+func (s *ClipboardService) GetGroupItems(groupName string) ([]ClipboardItem, error) {
+	items, err := s.store.ListByGroup(groupName, 100)
+	if err != nil {
+		return nil, err
+	}
+	if items == nil {
+		items = []ClipboardItem{}
+	}
+	return items, nil
+}
+
+// SetItemGroup assigns an item to a snippet group.
+func (s *ClipboardService) SetItemGroup(id int64, groupName string) error {
+	return s.store.SetGroup(id, groupName)
+}
+
 // DeleteItem removes a clipboard item.
 func (s *ClipboardService) DeleteItem(id int64) error {
 	return s.store.Delete(id)
@@ -131,8 +204,22 @@ func (s *ClipboardService) ClearAll() error {
 
 // CopyToClipboard writes content back to the system clipboard.
 func (s *ClipboardService) CopyToClipboard(content string) {
-	s.lastContent = content // Prevent re-capturing our own write
+	s.lastContent = content
 	clipboard.Write(clipboard.FmtText, []byte(content))
+}
+
+// GetRetentionDays returns the current retention period.
+func (s *ClipboardService) GetRetentionDays() int {
+	return s.retentionDays
+}
+
+// SetRetentionDays updates the retention period and runs cleanup.
+func (s *ClipboardService) SetRetentionDays(days int) (int64, error) {
+	if days < 1 {
+		days = 1
+	}
+	s.retentionDays = days
+	return s.store.CleanExpired(days)
 }
 
 // GetStats returns basic statistics about clipboard history.
@@ -150,7 +237,8 @@ func (s *ClipboardService) GetStats() (map[string]interface{}, error) {
 	}
 
 	return map[string]interface{}{
-		"total":  total,
-		"pinned": pinned,
+		"total":         total,
+		"pinned":        pinned,
+		"retentionDays": s.retentionDays,
 	}, nil
 }

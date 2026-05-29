@@ -3,6 +3,7 @@ import { ClipboardService } from "../bindings/github.com/nic/clipboard";
 
 let items = [];
 let searchTimeout = null;
+let currentFilter = "all";
 
 // DOM elements
 const listEl = document.getElementById("clipboard-list");
@@ -10,6 +11,12 @@ const emptyEl = document.getElementById("empty-state");
 const searchInput = document.getElementById("search-input");
 const statsEl = document.getElementById("stats");
 const clearBtn = document.getElementById("btn-clear");
+const filterBar = document.getElementById("filter-bar");
+const settingsBtn = document.getElementById("btn-settings");
+const settingsOverlay = document.getElementById("settings-overlay");
+const settingsClose = document.getElementById("settings-close");
+const settingsSave = document.getElementById("settings-save");
+const retentionInput = document.getElementById("retention-input");
 
 // Initialize
 async function init() {
@@ -22,10 +29,32 @@ async function init() {
 // Load clipboard items
 async function loadItems() {
   try {
-    items = await ClipboardService.GetItems(50, 0);
+    if (currentFilter === "all") {
+      items = await ClipboardService.GetItems(50, 0);
+    } else if (currentFilter === "snippets") {
+      items = await loadSnippets();
+    } else {
+      items = await ClipboardService.FilterByCategory(currentFilter);
+    }
     renderItems(items);
   } catch (err) {
     console.error("Failed to load items:", err);
+  }
+}
+
+// Load snippets (items with group names)
+async function loadSnippets() {
+  try {
+    const groups = await ClipboardService.GetGroups();
+    let allItems = [];
+    for (const group of groups) {
+      const groupItems = await ClipboardService.GetGroupItems(group);
+      allItems = allItems.concat(groupItems);
+    }
+    return allItems;
+  } catch (err) {
+    console.error("Failed to load snippets:", err);
+    return [];
   }
 }
 
@@ -33,11 +62,20 @@ async function loadItems() {
 async function loadStats() {
   try {
     const stats = await ClipboardService.GetStats();
-    statsEl.textContent = `共 ${stats.total} 条记录 · ${stats.pinned} 条已固定`;
+    statsEl.textContent = `共 ${stats.total} 条 · ${stats.pinned} 固定 · 保留 ${stats.retentionDays} 天`;
   } catch (err) {
     console.error("Failed to load stats:", err);
   }
 }
+
+// Category label map
+const categoryLabels = {
+  text: "文本",
+  url: "链接",
+  code: "代码",
+  path: "路径",
+  email: "邮箱",
+};
 
 // Render items to DOM
 function renderItems(itemList) {
@@ -51,12 +89,19 @@ function renderItems(itemList) {
   emptyEl.style.display = "none";
 
   listEl.innerHTML = itemList
-    .map(
-      (item) => {
-        const isLong = item.content.length > 200;
-        return `
+    .map((item) => {
+      const isLong = item.content.length > 200;
+      const catLabel = categoryLabels[item.category] || item.category;
+      const groupTag = item.groupName
+        ? `<span class="tag tag-group">${escapeHtml(item.groupName)}</span>`
+        : "";
+      return `
     <div class="clipboard-item ${item.pinned ? "pinned" : ""}" data-id="${item.id}">
       <div class="item-content" onclick="window.__copyItem(${item.id}, ${JSON.stringify(item.content).replace(/"/g, "&quot;")})">
+        <div class="item-tags">
+          <span class="tag tag-${item.category || "text"}">${catLabel}</span>
+          ${groupTag}
+        </div>
         <div class="item-text ${isLong ? "truncated" : ""}">${escapeHtml(isLong ? item.content.slice(0, 200) : item.content)}</div>
         ${isLong ? `<button class="preview-btn" onclick="event.stopPropagation(); window.__preview(${item.id})">展开预览</button>` : ""}
         <div class="item-meta">
@@ -66,13 +111,13 @@ function renderItems(itemList) {
         </div>
       </div>
       <div class="item-actions">
+        <button class="group-btn" onclick="event.stopPropagation(); window.__setGroup(${item.id})" title="加入片段库">📁</button>
         <button class="pin-btn ${item.pinned ? "active" : ""}" onclick="window.__togglePin(${item.id})" title="${item.pinned ? "取消固定" : "固定"}">📌</button>
         <button class="delete-btn" onclick="window.__deleteItem(${item.id})" title="删除">🗑️</button>
       </div>
     </div>
   `;
-      }
-    )
+    })
     .join("");
 }
 
@@ -86,19 +131,24 @@ function setupEventListeners() {
     }, 300);
   });
 
+  // Filter buttons
+  filterBar.addEventListener("click", (e) => {
+    const btn = e.target.closest(".filter-btn");
+    if (!btn) return;
+    filterBar.querySelectorAll(".filter-btn").forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+    currentFilter = btn.dataset.filter;
+    loadItems();
+  });
+
   // Clear all
   clearBtn.addEventListener("click", () => {
-    // Show inline confirm
-    if (clearBtn.dataset.confirming === "true") {
-      return;
-    }
+    if (clearBtn.dataset.confirming === "true") return;
     clearBtn.dataset.confirming = "true";
-    clearBtn.textContent = "确认清除？";
+    clearBtn.textContent = "确认？";
     clearBtn.classList.add("btn-confirm");
 
-    const timer = setTimeout(() => {
-      resetClearBtn();
-    }, 3000);
+    const timer = setTimeout(() => resetClearBtn(), 3000);
 
     clearBtn._confirmHandler = async () => {
       clearTimeout(timer);
@@ -106,7 +156,7 @@ function setupEventListeners() {
         await ClipboardService.ClearAll();
         await loadItems();
         await loadStats();
-        showToast("已清除所有未固定记录");
+        showToast("已清除");
       } catch (err) {
         console.error("Failed to clear:", err);
       }
@@ -125,24 +175,66 @@ function setupEventListeners() {
     }
   }
 
-  // Keyboard shortcut
+  // Settings
+  settingsBtn.addEventListener("click", openSettings);
+  settingsClose.addEventListener("click", () => (settingsOverlay.style.display = "none"));
+  settingsOverlay.addEventListener("click", (e) => {
+    if (e.target === settingsOverlay) settingsOverlay.style.display = "none";
+  });
+  settingsSave.addEventListener("click", saveSettings);
+
+  // Keyboard shortcuts
   document.addEventListener("keydown", (e) => {
     if ((e.metaKey || e.ctrlKey) && e.key === "f") {
       e.preventDefault();
       searchInput.focus();
     }
     if (e.key === "Escape") {
-      searchInput.value = "";
-      searchInput.blur();
-      loadItems();
+      if (settingsOverlay.style.display !== "none") {
+        settingsOverlay.style.display = "none";
+      } else {
+        searchInput.value = "";
+        searchInput.blur();
+        currentFilter = "all";
+        filterBar.querySelectorAll(".filter-btn").forEach((b) => b.classList.remove("active"));
+        filterBar.querySelector('[data-filter="all"]').classList.add("active");
+        loadItems();
+      }
     }
   });
 }
 
+// Settings
+async function openSettings() {
+  try {
+    const stats = await ClipboardService.GetStats();
+    retentionInput.value = stats.retentionDays || 30;
+  } catch (err) {
+    retentionInput.value = 30;
+  }
+  settingsOverlay.style.display = "flex";
+}
+
+async function saveSettings() {
+  const days = parseInt(retentionInput.value) || 30;
+  try {
+    await ClipboardService.SetRetentionDays(days);
+    await loadItems();
+    await loadStats();
+    showToast(`保留天数已设为 ${days} 天`);
+  } catch (err) {
+    console.error("Failed to save settings:", err);
+  }
+  settingsOverlay.style.display = "none";
+}
+
 // Listen for new clipboard items from backend
 function listenForNewItems() {
-  Events.On("clipboard:new", (event) => {
-    // Reload items when new clipboard content is detected
+  Events.On("clipboard:new", () => {
+    if (currentFilter === "all") loadItems();
+    loadStats();
+  });
+  Events.On("clipboard:cleaned", () => {
     loadItems();
     loadStats();
   });
@@ -151,6 +243,10 @@ function listenForNewItems() {
 // Search items
 async function searchItems(query) {
   try {
+    if (!query) {
+      await loadItems();
+      return;
+    }
     const results = await ClipboardService.SearchItems(query);
     renderItems(results);
   } catch (err) {
@@ -162,7 +258,7 @@ async function searchItems(query) {
 window.__copyItem = async (id, content) => {
   try {
     await ClipboardService.CopyToClipboard(content);
-    showToast("已复制到剪切板");
+    showToast("已复制");
   } catch (err) {
     console.error("Failed to copy:", err);
   }
@@ -189,6 +285,65 @@ window.__deleteItem = async (id) => {
   } catch (err) {
     console.error("Failed to delete:", err);
   }
+};
+
+// Set group for snippet
+window.__setGroup = async (id) => {
+  const groups = await ClipboardService.GetGroups();
+  const overlay = document.createElement("div");
+  overlay.className = "preview-overlay";
+  overlay.onclick = (e) => {
+    if (e.target === overlay) overlay.remove();
+  };
+
+  const groupList = groups.length
+    ? groups.map((g) => `<button class="group-option" data-group="${escapeHtml(g)}">${escapeHtml(g)}</button>`).join("")
+    : '<p class="setting-hint">暂无分组</p>';
+
+  overlay.innerHTML = `
+    <div class="preview-modal" style="max-width:320px;">
+      <div class="preview-header">
+        <span class="preview-meta">加入片段库</span>
+        <button class="preview-close" onclick="this.closest('.preview-overlay').remove()">✕</button>
+      </div>
+      <div class="settings-content">
+        <div class="group-list">${groupList}</div>
+        <div class="setting-item" style="margin-top:8px;">
+          <input type="text" id="new-group-input" placeholder="新建分组名称..." class="group-input">
+        </div>
+      </div>
+      <div class="preview-actions">
+        <button id="group-save-btn">保存</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  // Select existing group
+  overlay.querySelectorAll(".group-option").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      overlay.querySelector("#new-group-input").value = btn.dataset.group;
+      overlay.querySelectorAll(".group-option").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+    });
+  });
+
+  // Save
+  overlay.querySelector("#group-save-btn").addEventListener("click", async () => {
+    const name = overlay.querySelector("#new-group-input").value.trim();
+    if (!name) {
+      showToast("请输入分组名称");
+      return;
+    }
+    try {
+      await ClipboardService.SetItemGroup(id, name);
+      await loadItems();
+      showToast(`已加入「${name}」`);
+    } catch (err) {
+      console.error("Failed to set group:", err);
+    }
+    overlay.remove();
+  });
 };
 
 // Preview item

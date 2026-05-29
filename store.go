@@ -2,6 +2,10 @@ package main
 
 import (
 	"database/sql"
+	"net/mail"
+	"net/url"
+	"regexp"
+	"strings"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -11,9 +15,11 @@ import (
 type ClipboardItem struct {
 	ID        int64  `json:"id"`
 	Content   string `json:"content"`
-	Type      string `json:"type"` // "text" or "image"
+	Type      string `json:"type"`     // "text", "url", "email", "code", "path"
+	Category  string `json:"category"` // auto-detected category label
 	CreatedAt string `json:"createdAt"`
 	Pinned    bool   `json:"pinned"`
+	GroupName string `json:"groupName"` // snippet group name (empty = ungrouped)
 }
 
 // Store handles persistence of clipboard items using SQLite.
@@ -33,15 +39,24 @@ func NewStore(dbPath string) (*Store, error) {
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			content TEXT NOT NULL,
 			type TEXT NOT NULL DEFAULT 'text',
+			category TEXT NOT NULL DEFAULT '',
 			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-			pinned INTEGER NOT NULL DEFAULT 0
+			pinned INTEGER NOT NULL DEFAULT 0,
+			group_name TEXT NOT NULL DEFAULT ''
 		);
 		CREATE INDEX IF NOT EXISTS idx_clipboard_items_created_at ON clipboard_items(created_at DESC);
 		CREATE INDEX IF NOT EXISTS idx_clipboard_items_content ON clipboard_items(content);
+		CREATE INDEX IF NOT EXISTS idx_clipboard_items_category ON clipboard_items(category);
+		CREATE INDEX IF NOT EXISTS idx_clipboard_items_group ON clipboard_items(group_name);
 	`)
 	if err != nil {
 		return nil, err
 	}
+
+	// Migrate: add category column if missing
+	db.Exec("ALTER TABLE clipboard_items ADD COLUMN category TEXT NOT NULL DEFAULT ''")
+	// Migrate: add group_name column if missing
+	db.Exec("ALTER TABLE clipboard_items ADD COLUMN group_name TEXT NOT NULL DEFAULT ''")
 
 	return &Store{db: db}, nil
 }
@@ -55,10 +70,16 @@ func (s *Store) Save(content string, contentType string) (*ClipboardItem, error)
 		return nil, nil // Skip duplicate
 	}
 
+	// Auto-detect category
+	category := detectCategory(content)
+	if contentType == "text" {
+		contentType = category
+	}
+
 	now := time.Now().Format(time.RFC3339)
 	result, err := s.db.Exec(
-		"INSERT INTO clipboard_items (content, type, created_at) VALUES (?, ?, ?)",
-		content, contentType, now,
+		"INSERT INTO clipboard_items (content, type, category, created_at) VALUES (?, ?, ?, ?)",
+		content, contentType, category, now,
 	)
 	if err != nil {
 		return nil, err
@@ -69,6 +90,7 @@ func (s *Store) Save(content string, contentType string) (*ClipboardItem, error)
 		ID:        id,
 		Content:   content,
 		Type:      contentType,
+		Category:  category,
 		CreatedAt: now,
 		Pinned:    false,
 	}, nil
@@ -77,44 +99,81 @@ func (s *Store) Save(content string, contentType string) (*ClipboardItem, error)
 // List returns clipboard items with pagination.
 func (s *Store) List(limit, offset int) ([]ClipboardItem, error) {
 	rows, err := s.db.Query(
-		"SELECT id, content, type, created_at, pinned FROM clipboard_items ORDER BY pinned DESC, created_at DESC LIMIT ? OFFSET ?",
+		"SELECT id, content, type, COALESCE(category,''), created_at, pinned, COALESCE(group_name,'') FROM clipboard_items ORDER BY pinned DESC, created_at DESC LIMIT ? OFFSET ?",
 		limit, offset,
 	)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
+	return scanItems(rows)
+}
 
-	var items []ClipboardItem
+// ListByCategory returns items filtered by category.
+func (s *Store) ListByCategory(category string, limit int) ([]ClipboardItem, error) {
+	rows, err := s.db.Query(
+		"SELECT id, content, type, COALESCE(category,''), created_at, pinned, COALESCE(group_name,'') FROM clipboard_items WHERE category = ? ORDER BY pinned DESC, created_at DESC LIMIT ?",
+		category, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanItems(rows)
+}
+
+// ListByGroup returns items in a specific snippet group.
+func (s *Store) ListByGroup(groupName string, limit int) ([]ClipboardItem, error) {
+	rows, err := s.db.Query(
+		"SELECT id, content, type, COALESCE(category,''), created_at, pinned, COALESCE(group_name,'') FROM clipboard_items WHERE group_name = ? ORDER BY created_at DESC LIMIT ?",
+		groupName, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanItems(rows)
+}
+
+// ListGroups returns all distinct group names.
+func (s *Store) ListGroups() ([]string, error) {
+	rows, err := s.db.Query("SELECT DISTINCT group_name FROM clipboard_items WHERE group_name != '' ORDER BY group_name")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var groups []string
 	for rows.Next() {
-		var item ClipboardItem
-		var pinned int
-		err := rows.Scan(&item.ID, &item.Content, &item.Type, &item.CreatedAt, &pinned)
-		if err != nil {
+		var name string
+		if err := rows.Scan(&name); err != nil {
 			return nil, err
 		}
-		item.Pinned = pinned == 1
-		items = append(items, item)
+		groups = append(groups, name)
 	}
-	return items, nil
+	return groups, nil
+}
+
+// SetGroup assigns a group name to an item.
+func (s *Store) SetGroup(id int64, groupName string) error {
+	_, err := s.db.Exec("UPDATE clipboard_items SET group_name = ? WHERE id = ?", groupName, id)
+	return err
 }
 
 // Search finds clipboard items matching the query.
-// Supports time-based search with keywords like "今天", "昨天", "本周", "YYYY-MM-DD".
 func (s *Store) Search(query string, limit int) ([]ClipboardItem, error) {
 	var rows *sql.Rows
 	var err error
 
-	// Check if query is a time-based search
 	timeFilter := parseTimeQuery(query)
 	if timeFilter != "" {
 		rows, err = s.db.Query(
-			"SELECT id, content, type, created_at, pinned FROM clipboard_items WHERE created_at >= ? ORDER BY pinned DESC, created_at DESC LIMIT ?",
+			"SELECT id, content, type, COALESCE(category,''), created_at, pinned, COALESCE(group_name,'') FROM clipboard_items WHERE created_at >= ? ORDER BY pinned DESC, created_at DESC LIMIT ?",
 			timeFilter, limit,
 		)
 	} else {
 		rows, err = s.db.Query(
-			"SELECT id, content, type, created_at, pinned FROM clipboard_items WHERE content LIKE ? ORDER BY pinned DESC, created_at DESC LIMIT ?",
+			"SELECT id, content, type, COALESCE(category,''), created_at, pinned, COALESCE(group_name,'') FROM clipboard_items WHERE content LIKE ? ORDER BY pinned DESC, created_at DESC LIMIT ?",
 			"%"+query+"%", limit,
 		)
 	}
@@ -122,19 +181,7 @@ func (s *Store) Search(query string, limit int) ([]ClipboardItem, error) {
 		return nil, err
 	}
 	defer rows.Close()
-
-	var items []ClipboardItem
-	for rows.Next() {
-		var item ClipboardItem
-		var pinned int
-		err := rows.Scan(&item.ID, &item.Content, &item.Type, &item.CreatedAt, &pinned)
-		if err != nil {
-			return nil, err
-		}
-		item.Pinned = pinned == 1
-		items = append(items, item)
-	}
-	return items, nil
+	return scanItems(rows)
 }
 
 // Delete removes a clipboard item by ID.
@@ -155,13 +202,72 @@ func (s *Store) Clear() error {
 	return err
 }
 
+// CleanExpired removes non-pinned items older than the given duration.
+func (s *Store) CleanExpired(retentionDays int) (int64, error) {
+	cutoff := time.Now().AddDate(0, 0, -retentionDays).Format(time.RFC3339)
+	result, err := s.db.Exec("DELETE FROM clipboard_items WHERE pinned = 0 AND created_at < ?", cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 // Close closes the database connection.
 func (s *Store) Close() error {
 	return s.db.Close()
 }
 
-// parseTimeQuery checks if the query is a time-based keyword and returns
-// an RFC3339 timestamp string for filtering. Returns empty string if not a time query.
+// scanItems scans rows into ClipboardItem slice.
+func scanItems(rows *sql.Rows) ([]ClipboardItem, error) {
+	var items []ClipboardItem
+	for rows.Next() {
+		var item ClipboardItem
+		var pinned int
+		err := rows.Scan(&item.ID, &item.Content, &item.Type, &item.Category, &item.CreatedAt, &pinned, &item.GroupName)
+		if err != nil {
+			return nil, err
+		}
+		item.Pinned = pinned == 1
+		items = append(items, item)
+	}
+	return items, nil
+}
+
+// --- Content category detection ---
+
+var (
+	codePatterns = regexp.MustCompile(`(?m)(^(func |def |class |import |export |const |let |var |if |for |while |return |package |#include)|[{}\[\]];?\s*$|=>|->)`)
+	pathPattern  = regexp.MustCompile(`^[/~][\w./-]+$|^[A-Z]:\\[\w.\\-]+$`)
+)
+
+func detectCategory(content string) string {
+	trimmed := strings.TrimSpace(content)
+
+	// URL
+	if u, err := url.Parse(trimmed); err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != "" {
+		return "url"
+	}
+
+	// Email
+	if _, err := mail.ParseAddress(trimmed); err == nil && strings.Contains(trimmed, "@") && !strings.Contains(trimmed, " ") {
+		return "email"
+	}
+
+	// File path
+	if pathPattern.MatchString(trimmed) && len(trimmed) < 500 {
+		return "path"
+	}
+
+	// Code snippet
+	if codePatterns.MatchString(content) {
+		return "code"
+	}
+
+	return "text"
+}
+
+// --- Time query parsing ---
+
 func parseTimeQuery(query string) string {
 	now := time.Now()
 	var t time.Time
@@ -188,7 +294,6 @@ func parseTimeQuery(query string) string {
 	case "最近30天", "last 30 days", "最近一月":
 		t = now.AddDate(0, 0, -30)
 	default:
-		// Try parsing as date format YYYY-MM-DD
 		parsed, err := time.ParseInLocation("2006-01-02", query, now.Location())
 		if err == nil {
 			t = parsed

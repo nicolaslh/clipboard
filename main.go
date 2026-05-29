@@ -32,11 +32,22 @@ func main() {
 		Mac: application.MacOptions{
 			ApplicationShouldTerminateAfterLastWindowClosed: true,
 		},
+		KeyBindings: map[string]func(window application.Window){
+			"CmdOrCtrl+Shift+V": func(window application.Window) {
+				// Toggle window visibility
+				if window.IsVisible() {
+					window.Hide()
+				} else {
+					window.Show()
+					window.Focus()
+				}
+			},
+		},
 	})
 
 	app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title:  "Clipboard Manager",
-		Width:  800,
+		Width:  420,
 		Height: 600,
 		Mac: application.MacWindow{
 			InvisibleTitleBarHeight: 50,

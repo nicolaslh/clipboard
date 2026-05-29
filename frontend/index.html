@@ -11,12 +11,23 @@
         <header id="titlebar">
             <h1>剪切板</h1>
             <div class="header-actions">
+                <button id="btn-settings" class="btn btn-icon" title="设置">⚙️</button>
                 <button id="btn-clear" class="btn btn-danger" title="清除未固定项">清除</button>
             </div>
         </header>
 
         <div class="search-bar">
-            <input type="text" id="search-input" placeholder="搜索..." autocomplete="off">
+            <input type="text" id="search-input" placeholder="搜索内容、时间（今天/本周）..." autocomplete="off">
+        </div>
+
+        <div class="filter-bar" id="filter-bar">
+            <button class="filter-btn active" data-filter="all">全部</button>
+            <button class="filter-btn" data-filter="text">文本</button>
+            <button class="filter-btn" data-filter="url">链接</button>
+            <button class="filter-btn" data-filter="code">代码</button>
+            <button class="filter-btn" data-filter="path">路径</button>
+            <button class="filter-btn" data-filter="email">邮箱</button>
+            <button class="filter-btn" data-filter="snippets">片段库</button>
         </div>
 
         <div class="stats" id="stats"></div>
@@ -27,6 +38,35 @@
         <div id="empty-state" class="empty-state" style="display: none;">
             <p>暂无记录</p>
             <p class="hint">复制内容后会自动出现在这里</p>
+        </div>
+    </div>
+
+    <!-- Settings modal -->
+    <div id="settings-overlay" class="preview-overlay" style="display:none;">
+        <div class="preview-modal settings-modal">
+            <div class="preview-header">
+                <span class="preview-meta">设置</span>
+                <button class="preview-close" id="settings-close">✕</button>
+            </div>
+            <div class="settings-content">
+                <div class="setting-item">
+                    <label>自动清理保留天数</label>
+                    <div class="setting-control">
+                        <input type="number" id="retention-input" min="1" max="365" value="30">
+                        <span class="setting-hint">超过此天数的未固定记录将自动删除</span>
+                    </div>
+                </div>
+                <div class="setting-item">
+                    <label>快捷键</label>
+                    <div class="setting-control">
+                        <kbd>Cmd+Shift+V</kbd>
+                        <span class="setting-hint">显示/隐藏窗口（需窗口聚焦）</span>
+                    </div>
+                </div>
+            </div>
+            <div class="preview-actions">
+                <button id="settings-save">保存</button>
+            </div>
         </div>
     </div>
 
