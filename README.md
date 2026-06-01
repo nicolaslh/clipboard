@@ -84,13 +84,64 @@ wails3 task build
 
 产物在 `bin/clipboard`。
 
-### 打包为 .app
+### 打包为 .app (macOS)
 
 ```bash
 wails3 task darwin:package
 ```
 
 产物在 `bin/clipboard.app`，可直接运行或拖入 Applications。
+
+### 打包为 .exe (Windows)
+
+#### 前置要求
+
+- Go 1.23+
+- Node.js 18+
+- [TDM-GCC](https://jmeubank.github.io/tdm-gcc/) 或 MSYS2（CGo 需要 GCC）
+- [Wails v3 CLI](https://v3.wails.io/getting-started/installation/)
+- [Task](https://taskfile.dev/)
+
+#### 步骤
+
+```bash
+# 1. 安装依赖
+go mod tidy
+cd frontend && npm install && cd ..
+
+# 2. 生成绑定
+wails3 generate bindings
+
+# 3. 构建前端
+cd frontend && npm run build && cd ..
+
+# 4. 编译（production 模式，嵌入前端资源）
+go build -tags production -ldflags "-H windowsgui" -o bin/clipboard.exe .
+```
+
+`-H windowsgui` 隐藏 Windows 控制台窗口，使其作为 GUI 应用运行。
+
+#### 从 macOS 交叉编译 Windows
+
+```bash
+# 需要安装 Docker
+GOOS=windows GOARCH=amd64 CGO_ENABLED=1 CC=x86_64-w64-mingw32-gcc go build -tags production -ldflags "-H windowsgui" -o bin/clipboard.exe .
+```
+
+或使用 Docker 交叉编译（推荐）：
+
+```bash
+docker run --rm -v $(pwd):/src -w /src goreleaser/goreleaser-cross:latest \
+  go build -tags production -ldflags "-H windowsgui" -o bin/clipboard.exe .
+```
+
+### 数据存储位置
+
+| 平台 | 路径 |
+|------|------|
+| macOS | `~/Library/Application Support/ClipboardManager/` |
+| Windows | `%APPDATA%\ClipboardManager\` |
+| Linux | `~/.local/share/clipboard-manager/` |
 
 ## 快捷键
 

@@ -5,6 +5,8 @@ import (
 	_ "embed"
 	"log"
 	"log/slog"
+	"os"
+	"path/filepath"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
@@ -17,7 +19,11 @@ var assets embed.FS
 var trayIcon []byte
 
 func main() {
-	store, err := NewStore("clipboard.db")
+	// Use ~/Library/Application Support/ClipboardManager for data
+	dataDir := getDataDir()
+	dbPath := filepath.Join(dataDir, "clipboard.db")
+
+	store, err := NewStore(dbPath)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -93,4 +99,37 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+}
+
+func getDataDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	var dir string
+	switch {
+	case filepath.Separator == '\\': // Windows
+		appData := os.Getenv("APPDATA")
+		if appData != "" {
+			dir = filepath.Join(appData, "ClipboardManager")
+		} else {
+			dir = filepath.Join(home, "AppData", "Roaming", "ClipboardManager")
+		}
+	default: // macOS / Linux
+		dir = filepath.Join(home, "Library", "Application Support", "ClipboardManager")
+		if _, err := os.Stat(filepath.Join(home, "Library")); os.IsNotExist(err) {
+			// Linux: use XDG data dir
+			xdg := os.Getenv("XDG_DATA_HOME")
+			if xdg == "" {
+				xdg = filepath.Join(home, ".local", "share")
+			}
+			dir = filepath.Join(xdg, "clipboard-manager")
+		}
+	}
+
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		log.Fatal(err)
+	}
+	return dir
 }
