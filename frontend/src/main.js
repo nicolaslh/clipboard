@@ -76,6 +76,7 @@ const categoryLabels = {
   code: "代码",
   path: "路径",
   email: "邮箱",
+  image: "图片",
 };
 
 // Render items to DOM
@@ -91,24 +92,38 @@ function renderItems(itemList) {
 
   listEl.innerHTML = itemList
     .map((item) => {
-      const isLong = item.content.length > 200;
+      const isImage = item.category === "image";
+      const isLong = !isImage && item.content.length > 200;
       const catLabel = categoryLabels[item.category] || item.category;
       const groupTag = item.groupName
         ? `<span class="tag tag-group">${escapeHtml(item.groupName)}</span>`
         : "";
+
+      let contentHtml;
+      if (isImage) {
+        contentHtml = `<div class="item-image"><img src="/api/clipboard?id=${item.id}" alt="图片" loading="lazy"></div>`;
+      } else {
+        contentHtml = `<div class="item-text ${isLong ? "truncated" : ""}">${escapeHtml(isLong ? item.content.slice(0, 200) : item.content)}</div>`;
+        if (isLong) {
+          contentHtml += `<button class="preview-btn" onclick="event.stopPropagation(); window.__preview(${item.id})">展开预览</button>`;
+        }
+      }
+
+      const clickAction = isImage
+        ? `window.__copyImage(${item.id})`
+        : `window.__copyItem(${item.id}, ${JSON.stringify(item.content).replace(/"/g, "&quot;")})`;
+
       return `
     <div class="clipboard-item ${item.pinned ? "pinned" : ""}" data-id="${item.id}">
-      <div class="item-content" onclick="window.__copyItem(${item.id}, ${JSON.stringify(item.content).replace(/"/g, "&quot;")})">
+      <div class="item-content" onclick="${clickAction}">
         <div class="item-tags">
           <span class="tag tag-${item.category || "text"}">${catLabel}</span>
           ${groupTag}
         </div>
-        <div class="item-text ${isLong ? "truncated" : ""}">${escapeHtml(isLong ? item.content.slice(0, 200) : item.content)}</div>
-        ${isLong ? `<button class="preview-btn" onclick="event.stopPropagation(); window.__preview(${item.id})">展开预览</button>` : ""}
+        ${contentHtml}
         <div class="item-meta">
           <span>${formatTime(item.createdAt)}</span>
-          <span>·</span>
-          <span>${item.content.length} 字符</span>
+          ${!isImage ? `<span>·</span><span>${item.content.length} 字符</span>` : ""}
         </div>
       </div>
       <div class="item-actions">
@@ -280,6 +295,16 @@ window.__copyItem = async (id, content) => {
     showToast("已复制");
   } catch (err) {
     console.error("Failed to copy:", err);
+  }
+};
+
+// Copy image to clipboard
+window.__copyImage = async (id) => {
+  try {
+    await ClipboardService.CopyImageToClipboard(id);
+    showToast("图片已复制");
+  } catch (err) {
+    console.error("Failed to copy image:", err);
   }
 };
 

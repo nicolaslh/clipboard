@@ -308,6 +308,11 @@ body {
     color: var(--pin-color);
 }
 
+.tag-image {
+    background: rgba(255, 45, 85, 0.1);
+    color: #ff2d55;
+}
+
 .tag-group {
     background: rgba(175, 82, 222, 0.1);
     color: #af52de;
@@ -345,6 +350,23 @@ body {
 
 .item-text.truncated::after {
     display: none;
+}
+
+/* Image items */
+.item-image {
+    margin: 4px 0;
+    border-radius: 6px;
+    overflow: hidden;
+    max-height: 120px;
+}
+
+.item-image img {
+    display: block;
+    max-width: 100%;
+    max-height: 120px;
+    object-fit: contain;
+    border-radius: 6px;
+    background: var(--bg-secondary);
 }
 
 .item-meta {

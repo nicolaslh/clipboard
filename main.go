@@ -29,7 +29,9 @@ func main() {
 		Description: "A clipboard history manager",
 		LogLevel:    slog.LevelDebug,
 		Services: []application.Service{
-			application.NewService(clipboardService),
+			application.NewServiceWithOptions(clipboardService, application.ServiceOptions{
+				Route: "/api/clipboard",
+			}),
 		},
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),

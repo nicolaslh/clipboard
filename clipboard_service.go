@@ -2,7 +2,13 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"fmt"
 	"log/slog"
+	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -15,6 +21,7 @@ type ClipboardService struct {
 	cancel        context.CancelFunc
 	app           *application.App
 	lastContent   string
+	lastImageHash string
 	retentionDays int
 }
 
@@ -73,26 +80,46 @@ func (s *ClipboardService) pollClipboard(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			data := clipboard.Read(clipboard.FmtText)
-			if len(data) == 0 {
-				continue
+			// Check text clipboard
+			textData := clipboard.Read(clipboard.FmtText)
+			if len(textData) > 0 {
+				content := string(textData)
+				if content != s.lastContent {
+					s.lastContent = content
+					item, err := s.store.Save(content, "text")
+					if err != nil {
+						slog.Error("failed to save clipboard text", "error", err)
+					} else if item != nil {
+						s.app.Event.Emit("clipboard:new", item)
+					}
+					continue
+				}
 			}
-			content := string(data)
-			if content == s.lastContent {
-				continue
-			}
-			s.lastContent = content
 
-			item, err := s.store.Save(content, "text")
-			if err != nil {
-				slog.Error("failed to save clipboard item", "error", err)
-				continue
-			}
-			if item != nil {
-				s.app.Event.Emit("clipboard:new", item)
+			// Check image clipboard
+			imgData := clipboard.Read(clipboard.FmtImage)
+			if len(imgData) > 0 {
+				hash := hashBytes(imgData)
+				if hash != s.lastImageHash {
+					s.lastImageHash = hash
+					// Store as base64
+					b64 := base64.StdEncoding.EncodeToString(imgData)
+					content := "data:image/png;base64," + b64
+					item, err := s.store.SaveImage(content, len(imgData))
+					if err != nil {
+						slog.Error("failed to save clipboard image", "error", err)
+					} else if item != nil {
+						s.app.Event.Emit("clipboard:new", item)
+					}
+				}
 			}
 		}
 	}
+}
+
+func hashBytes(data []byte) string {
+	h := sha256.Sum256(data)
+	return hex.EncodeToString(h[:8]) // short hash is enough for dedup
 }
 
 // periodicCleanup runs every hour to remove expired items.
@@ -246,6 +273,65 @@ func (s *ClipboardService) ClearAll() error {
 func (s *ClipboardService) CopyToClipboard(content string) {
 	s.lastContent = content
 	clipboard.Write(clipboard.FmtText, []byte(content))
+}
+
+// CopyImageToClipboard writes image data back to the system clipboard.
+func (s *ClipboardService) CopyImageToClipboard(id int64) error {
+	item, err := s.store.GetByID(id)
+	if err != nil {
+		return err
+	}
+	if item == nil || item.Category != "image" {
+		return fmt.Errorf("item is not an image")
+	}
+	// Decode base64 data URI
+	data, err := decodeDataURI(item.Content)
+	if err != nil {
+		return err
+	}
+	s.lastImageHash = hashBytes(data)
+	clipboard.Write(clipboard.FmtImage, data)
+	return nil
+}
+
+// ServeHTTP serves image data for the frontend.
+func (s *ClipboardService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	idStr := r.URL.Query().Get("id")
+	if idStr == "" {
+		http.Error(w, "missing id", http.StatusBadRequest)
+		return
+	}
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+	item, err := s.store.GetByID(id)
+	if err != nil || item == nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if item.Category != "image" {
+		http.Error(w, "not an image", http.StatusBadRequest)
+		return
+	}
+	data, err := decodeDataURI(item.Content)
+	if err != nil {
+		http.Error(w, "decode error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", "max-age=86400")
+	w.Write(data)
+}
+
+func decodeDataURI(dataURI string) ([]byte, error) {
+	// Format: data:image/png;base64,XXXX
+	const prefix = "data:image/png;base64,"
+	if len(dataURI) <= len(prefix) {
+		return nil, fmt.Errorf("invalid data URI")
+	}
+	return base64.StdEncoding.DecodeString(dataURI[len(prefix):])
 }
 
 // GetRetentionDays returns the current retention period.

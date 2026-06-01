@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"fmt"
 	"net/mail"
 	"net/url"
 	"regexp"
@@ -96,6 +97,59 @@ func (s *Store) Save(content string, contentType string) (*ClipboardItem, error)
 		CreatedAt: now,
 		Pinned:    false,
 	}, nil
+}
+
+// SaveImage inserts a new image clipboard item, skipping duplicates.
+func (s *Store) SaveImage(dataURI string, size int) (*ClipboardItem, error) {
+	// Check if last item is the same image (compare first 100 chars of data URI)
+	var lastContent string
+	err := s.db.QueryRow("SELECT content FROM clipboard_items WHERE category = 'image' ORDER BY created_at DESC LIMIT 1").Scan(&lastContent)
+	if err == nil && lastContent == dataURI {
+		return nil, nil
+	}
+
+	now := time.Now().Format(time.RFC3339)
+	label := fmt.Sprintf("[图片 %s]", formatSize(size))
+	result, err := s.db.Exec(
+		"INSERT INTO clipboard_items (content, type, category, created_at) VALUES (?, ?, ?, ?)",
+		dataURI, label, "image", now,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	id, _ := result.LastInsertId()
+	return &ClipboardItem{
+		ID:        id,
+		Content:   dataURI,
+		Type:      label,
+		Category:  "image",
+		CreatedAt: now,
+		Pinned:    false,
+	}, nil
+}
+
+// GetByID returns a single clipboard item by ID.
+func (s *Store) GetByID(id int64) (*ClipboardItem, error) {
+	var item ClipboardItem
+	var pinned int
+	err := s.db.QueryRow(
+		"SELECT id, content, type, COALESCE(category,''), created_at, pinned, COALESCE(group_name,'') FROM clipboard_items WHERE id = ?", id,
+	).Scan(&item.ID, &item.Content, &item.Type, &item.Category, &item.CreatedAt, &pinned, &item.GroupName)
+	if err != nil {
+		return nil, err
+	}
+	item.Pinned = pinned == 1
+	return &item, nil
+}
+
+func formatSize(bytes int) string {
+	if bytes < 1024 {
+		return fmt.Sprintf("%d B", bytes)
+	} else if bytes < 1024*1024 {
+		return fmt.Sprintf("%.1f KB", float64(bytes)/1024)
+	}
+	return fmt.Sprintf("%.1f MB", float64(bytes)/(1024*1024))
 }
 
 // List returns clipboard items with pagination.
