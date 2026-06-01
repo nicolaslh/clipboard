@@ -2,7 +2,7 @@
 
 一款基于 Wails v3 构建的 macOS 剪切板管理工具，轻量、快速、本地优先。
 
-![UI 截图](image.png)
+<img src="image.png" width="420" alt="UI 截图">
 
 ## 功能特性
 

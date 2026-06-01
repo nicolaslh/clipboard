@@ -2,7 +2,7 @@
 
 A lightweight, fast, local-first clipboard manager for macOS built with Wails v3.
 
-![UI Screenshot](image.png)
+<img src="image.png" width="420" alt="UI Screenshot">
 
 ## Features
 
