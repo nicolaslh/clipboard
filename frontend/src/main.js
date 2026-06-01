@@ -4,6 +4,7 @@ import { ClipboardService } from "../bindings/github.com/nic/clipboard";
 let items = [];
 let searchTimeout = null;
 let currentFilter = "all";
+let currentQuery = "";
 
 // DOM elements
 const listEl = document.getElementById("clipboard-list");
@@ -30,6 +31,7 @@ async function init() {
 // Load clipboard items
 async function loadItems() {
   try {
+    currentQuery = "";
     if (currentFilter === "all") {
       items = await ClipboardService.GetItems(50, 0);
     } else if (currentFilter === "snippets") {
@@ -103,7 +105,9 @@ function renderItems(itemList) {
       if (isImage) {
         contentHtml = `<div class="item-image"><img src="/api/clipboard?id=${item.id}" alt="图片" loading="lazy"></div>`;
       } else {
-        contentHtml = `<div class="item-text ${isLong ? "truncated" : ""}">${escapeHtml(isLong ? item.content.slice(0, 200) : item.content)}</div>`;
+        const displayText = isLong ? item.content.slice(0, 200) : item.content;
+        const highlighted = currentQuery ? highlightText(escapeHtml(displayText), currentQuery) : escapeHtml(displayText);
+        contentHtml = `<div class="item-text ${isLong ? "truncated" : ""}">${highlighted}</div>`;
         if (isLong) {
           contentHtml += `<button class="preview-btn" onclick="event.stopPropagation(); window.__preview(${item.id})">展开预览</button>`;
         }
@@ -277,6 +281,7 @@ function listenForNewItems() {
 // Search items
 async function searchItems(query) {
   try {
+    currentQuery = query;
     if (!query) {
       await loadItems();
       return;
@@ -421,6 +426,14 @@ function escapeHtml(text) {
   const div = document.createElement("div");
   div.textContent = text;
   return div.innerHTML;
+}
+
+// Utility: highlight search matches in already-escaped HTML text
+function highlightText(escapedText, query) {
+  if (!query) return escapedText;
+  const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const regex = new RegExp(`(${escaped})`, "gi");
+  return escapedText.replace(regex, '<mark class="highlight">$1</mark>');
 }
 
 // Utility: format time

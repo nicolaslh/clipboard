@@ -648,6 +648,20 @@ body {
     border-color: var(--accent);
 }
 
+/* Search highlight */
+.highlight {
+    background: rgba(255, 214, 0, 0.35);
+    color: inherit;
+    border-radius: 2px;
+    padding: 0 1px;
+}
+
+@media (prefers-color-scheme: dark) {
+    .highlight {
+        background: rgba(255, 214, 0, 0.25);
+    }
+}
+
 /* Toast notification */
 .toast {
     position: fixed;
