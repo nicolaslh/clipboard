@@ -22,8 +22,22 @@ tasks:
     dir: frontend
     deps:
       - install:frontend:deps
+      - generate:bindings
     cmds:
       - npm run build
+
+  # Generates the frontend JS bindings from the Go services.
+  # The output (frontend/bindings) is git-ignored and must be regenerated
+  # on a clean checkout, otherwise the frontend build cannot resolve its imports.
+  generate:bindings:
+    sources:
+      - "**/*.go"
+      - go.mod
+      - go.sum
+    generates:
+      - frontend/bindings/**/*
+    cmds:
+      - wails3 generate bindings -clean=true -f "-tags production"
 
   common:dev:frontend:
     dir: frontend
