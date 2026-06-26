@@ -1,0 +1,203 @@
+name: Release
+
+# 推送形如 v1.0.0 的 tag 时触发，自动构建各平台安装包并发布到 GitHub Release
+on:
+  push:
+    tags:
+      - "v*"
+
+# 允许 workflow 创建 Release 并上传产物
+permissions:
+  contents: write
+
+env:
+  # 应用名称（需与项目 Taskfile.yml 中的 APP_NAME 一致）
+  # 复用此 workflow 到其它项目时，只改这里即可
+  APP_NAME: "clipboard"
+  GO_VERSION: "1.25"
+  NODE_VERSION: "20"
+  # 与 go.mod 中的 Wails 版本保持一致
+  WAILS_VERSION: "v3.0.0-alpha.77"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # macOS：分别构建 Intel (amd64) 与 Apple Silicon (arm64) 的 .app，
+  # 各自打包为 .dmg 与 .zip
+  # ---------------------------------------------------------------------------
+  macos:
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            label: apple-silicon
+          - arch: amd64
+            label: intel
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install build tools (task + wails3)
+        run: |
+          go install github.com/go-task/task/v3/cmd/task@latest
+          go install github.com/wailsapp/wails/v3/cmd/wails3@${WAILS_VERSION}
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Set version from tag
+        run: |
+          # 去掉 tag 前缀 v，例如 v1.2.3 -> 1.2.3
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "Using version: ${VERSION}"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${VERSION}" build/darwin/Info.plist
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${VERSION}" build/darwin/Info.plist
+
+      - name: Package .app bundle (${{ matrix.arch }})
+        run: task darwin:package ARCH=${{ matrix.arch }}
+
+      - name: Create .dmg and .zip
+        run: |
+          cd bin
+          # 压缩为 zip
+          ditto -c -k --keepParent "${APP_NAME}.app" "${APP_NAME}-macos-${{ matrix.label }}.zip"
+          # 生成 dmg
+          hdiutil create -volname "${APP_NAME}" \
+            -srcfolder "${APP_NAME}.app" \
+            -ov -format UDZO \
+            "${APP_NAME}-macos-${{ matrix.label }}.dmg"
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            bin/${{ env.APP_NAME }}-macos-${{ matrix.label }}.dmg
+            bin/${{ env.APP_NAME }}-macos-${{ matrix.label }}.zip
+
+  # ---------------------------------------------------------------------------
+  # Windows：构建并生成 NSIS 安装包 (.exe)
+  # ---------------------------------------------------------------------------
+  windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install NSIS
+        run: choco install nsis -y
+
+      - name: Install build tools (task + wails3)
+        shell: pwsh
+        run: |
+          go install github.com/go-task/task/v3/cmd/task@latest
+          go install github.com/wailsapp/wails/v3/cmd/wails3@$env:WAILS_VERSION
+          echo "$(go env GOPATH)\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Add NSIS to PATH
+        shell: pwsh
+        run: echo "C:\Program Files (x86)\NSIS" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Set version from tag
+        shell: bash
+        run: |
+          # 去掉 tag 前缀 v，例如 v1.2.3 -> 1.2.3
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "Using version: ${VERSION}"
+          # exe 元数据（由 generate:syso 读取 info.json）
+          sed -i "s|\"file_version\": \"[^\"]*\"|\"file_version\": \"${VERSION}\"|" build/windows/info.json
+          sed -i "s|\"ProductVersion\": \"[^\"]*\"|\"ProductVersion\": \"${VERSION}\"|" build/windows/info.json
+          # NSIS 安装包显示版本
+          sed -i "s|!define INFO_PRODUCTVERSION \"[^\"]*\"|!define INFO_PRODUCTVERSION \"${VERSION}\"|" build/windows/nsis/wails_tools.nsh
+
+      - name: Package NSIS installer
+        run: task windows:package
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            bin/*-installer.exe
+
+  # ---------------------------------------------------------------------------
+  # Linux：构建并生成 AppImage / .deb / .rpm 安装包
+  # ---------------------------------------------------------------------------
+  linux:
+    runs-on: ubuntu-latest
+    env:
+      # 让 AppImage 在无 FUSE 的 CI 环境中可被解包运行
+      APPIMAGE_EXTRACT_AND_RUN: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            pkg-config \
+            rpm
+
+      - name: Install build tools (task + wails3)
+        run: |
+          go install github.com/go-task/task/v3/cmd/task@latest
+          go install github.com/wailsapp/wails/v3/cmd/wails3@${WAILS_VERSION}
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Set version from tag
+        run: |
+          # 去掉 tag 前缀 v，例如 v1.2.3 -> 1.2.3
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "Using version: ${VERSION}"
+          sed -i "s|^version: .*|version: \"${VERSION}\"|" build/linux/nfpm/nfpm.yaml
+
+      - name: Package Linux artifacts
+        run: task linux:package
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            bin/*.AppImage
+            bin/*.deb
+            bin/*.rpm

@@ -34,30 +34,33 @@ tasks:
     env:
       WAILS_VITE_PORT: '{{.WAILS_VITE_PORT | default "9245"}}'
 
+  # Generates the macOS .icns and Windows .ico from build/appicon.png.
+  # These outputs are git-ignored and must be regenerated on a clean checkout.
+  generate:icons:
+    sources:
+      - build/appicon.png
+    generates:
+      - build/darwin/icons.icns
+      - build/windows/icon.ico
+    cmds:
+      - wails3 generate icons -input build/appicon.png -macfilename build/darwin/icons.icns -windowsfilename build/windows/icon.ico
+
+  # ---------------------------------------------------------------------------
+  # Generic / native build (used by `dev` and `run`)
+  # Pass ARCH=amd64|arm64 to cross-compile for the host OS.
+  # ---------------------------------------------------------------------------
   build:
     deps:
       - build:frontend
     cmds:
-      - go build -tags production -o {{.BIN_DIR}}/{{.APP_NAME}} .
+      - go build -tags production -trimpath -ldflags="-w -s" -o {{.BIN_DIR}}/{{.APP_NAME}} .
+    env:
+      CGO_ENABLED: '1'
+      GOARCH: '{{.ARCH | default ARCH}}'
 
   run:
     cmds:
       - ./{{.BIN_DIR}}/{{.APP_NAME}}
-
-  darwin:package:
-    deps:
-      - build
-    cmds:
-      - mkdir -p {{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/MacOS
-      - mkdir -p {{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Resources
-      - cp {{.BIN_DIR}}/{{.APP_NAME}} {{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/MacOS/
-      - cp build/darwin/Info.plist {{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/
-      - cp build/darwin/icons.icns {{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Resources/
-      - codesign --force --deep --sign - {{.BIN_DIR}}/{{.APP_NAME}}.app
-
-  package:
-    cmds:
-      - task: darwin:package
 
   dev:
     cmds:
@@ -68,3 +71,127 @@ tasks:
       - rm -rf {{.BIN_DIR}}
       - rm -rf frontend/dist
       - rm -rf frontend/node_modules
+
+  # ===========================================================================
+  # macOS
+  # ===========================================================================
+  darwin:build:
+    summary: Builds the macOS binary. Pass ARCH=amd64|arm64.
+    deps:
+      - build:frontend
+      - generate:icons
+    cmds:
+      - go build -tags production -trimpath -ldflags="-w -s" -o {{.BIN_DIR}}/{{.APP_NAME}} .
+    env:
+      GOOS: darwin
+      CGO_ENABLED: '1'
+      GOARCH: '{{.ARCH | default ARCH}}'
+      CGO_CFLAGS: "-mmacosx-version-min=10.15"
+      CGO_LDFLAGS: "-mmacosx-version-min=10.15"
+      MACOSX_DEPLOYMENT_TARGET: "10.15"
+
+  darwin:package:
+    summary: Packages the macOS .app bundle. Pass ARCH=amd64|arm64.
+    deps:
+      - darwin:build
+    cmds:
+      - mkdir -p {{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/MacOS
+      - mkdir -p {{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Resources
+      - cp {{.BIN_DIR}}/{{.APP_NAME}} {{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/MacOS/
+      - cp build/darwin/Info.plist {{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/
+      - cp build/darwin/icons.icns {{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Resources/
+      - codesign --force --deep --sign - {{.BIN_DIR}}/{{.APP_NAME}}.app
+
+  # Backwards-compatible alias for the host-architecture macOS package
+  package:
+    cmds:
+      - task: darwin:package
+
+  # ===========================================================================
+  # Windows
+  # ===========================================================================
+  windows:build:
+    summary: Builds the Windows .exe. Pass ARCH=amd64|arm64.
+    deps:
+      - build:frontend
+      - generate:icons
+    cmds:
+      - wails3 generate syso -arch {{.ARCH | default ARCH}} -icon build/windows/icon.ico -manifest build/windows/wails.exe.manifest -info build/windows/info.json -out wails_windows_{{.ARCH | default ARCH}}.syso
+      - go build -tags production -trimpath -ldflags="-w -s -H windowsgui" -o {{.BIN_DIR}}/{{.APP_NAME}}.exe .
+      - cmd: powershell Remove-Item wails_windows_*.syso
+        platforms: [windows]
+      - cmd: rm -f wails_windows_*.syso
+        platforms: [linux, darwin]
+    env:
+      GOOS: windows
+      CGO_ENABLED: '1'
+      GOARCH: '{{.ARCH | default ARCH}}'
+
+  windows:package:
+    summary: Builds and creates the NSIS installer (bin/<name>-<arch>-installer.exe).
+    deps:
+      - windows:build
+    dir: build/windows/nsis
+    cmds:
+      - wails3 generate webview2bootstrapper -dir "{{.ROOT_DIR}}/build/windows/nsis"
+      - cmd: makensis -DARG_WAILS_{{.ARG_FLAG}}_BINARY="{{.ROOT_DIR}}\{{.BIN_DIR}}\{{.APP_NAME}}.exe" project.nsi
+        platforms: [windows]
+      - cmd: makensis -DARG_WAILS_{{.ARG_FLAG}}_BINARY="{{.ROOT_DIR}}/{{.BIN_DIR}}/{{.APP_NAME}}.exe" project.nsi
+        platforms: [linux, darwin]
+    vars:
+      ARG_FLAG: '{{if eq (.ARCH | default ARCH) "amd64"}}AMD64{{else}}ARM64{{end}}'
+
+  # ===========================================================================
+  # Linux
+  # ===========================================================================
+  linux:build:
+    summary: Builds the Linux binary. Pass ARCH=amd64|arm64.
+    deps:
+      - build:frontend
+    cmds:
+      - go build -tags production -trimpath -ldflags="-w -s" -o {{.BIN_DIR}}/{{.APP_NAME}} .
+    env:
+      GOOS: linux
+      CGO_ENABLED: '1'
+      GOARCH: '{{.ARCH | default ARCH}}'
+
+  linux:generate:dotdesktop:
+    summary: Generates the .desktop file used by the AppImage and packages.
+    cmds:
+      - mkdir -p build/linux/appimage
+      - wails3 generate .desktop -name "{{.APP_NAME}}" -exec "{{.APP_NAME}}" -icon "{{.APP_NAME}}" -outputfile "{{.ROOT_DIR}}/build/linux/{{.APP_NAME}}.desktop" -categories "Utility;"
+
+  linux:package:
+    summary: Builds and packages the Linux AppImage, .deb and .rpm artifacts.
+    deps:
+      - linux:build
+    cmds:
+      - task: linux:generate:dotdesktop
+      - task: linux:create:appimage
+      - task: linux:create:deb
+      - task: linux:create:rpm
+
+  linux:create:appimage:
+    summary: Creates an AppImage in bin/.
+    dir: build/linux/appimage
+    deps:
+      - linux:build
+      - linux:generate:dotdesktop
+    cmds:
+      - cp "{{.ROOT_DIR}}/bin/{{.APP_NAME}}" "{{.APP_NAME}}"
+      - cp "{{.ROOT_DIR}}/build/appicon.png" "{{.APP_NAME}}.png"
+      - wails3 generate appimage -binary "{{.APP_NAME}}" -icon "{{.APP_NAME}}.png" -desktopfile "../{{.APP_NAME}}.desktop" -outputdir "{{.ROOT_DIR}}/bin" -builddir "{{.ROOT_DIR}}/build/linux/appimage/build"
+
+  linux:create:deb:
+    summary: Creates a .deb package in bin/.
+    cmds:
+      - wails3 tool package -name "{{.APP_NAME}}" -format deb -config ./build/linux/nfpm/nfpm.yaml -out {{.ROOT_DIR}}/bin
+    env:
+      GOARCH: '{{.ARCH | default ARCH}}'
+
+  linux:create:rpm:
+    summary: Creates a .rpm package in bin/.
+    cmds:
+      - wails3 tool package -name "{{.APP_NAME}}" -format rpm -config ./build/linux/nfpm/nfpm.yaml -out {{.ROOT_DIR}}/bin
+    env:
+      GOARCH: '{{.ARCH | default ARCH}}'

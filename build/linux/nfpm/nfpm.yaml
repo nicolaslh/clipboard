@@ -1,0 +1,45 @@
+# nfpm configuration for building .deb / .rpm / archlinux packages.
+# Docs: https://nfpm.goreleaser.com
+#
+# NOTE: The runtime dependencies below target the default (GTK3 / WebKit2GTK 4.1)
+# Wails v3 Linux build. If you build with `-tags gtk4`, switch them to the
+# GTK4 / webkitgtk-6.0 equivalents.
+
+name: "clipboard"
+arch: ${GOARCH}
+platform: "linux"
+version: "0.1.0"
+section: "default"
+priority: "extra"
+maintainer: "nic"
+description: "A clipboard history manager"
+vendor: "nic"
+homepage: "https://github.com/nic/clipboard"
+license: "MIT"
+release: "1"
+
+contents:
+  - src: "./bin/clipboard"
+    dst: "/usr/local/bin/clipboard"
+  - src: "./build/appicon.png"
+    dst: "/usr/share/icons/hicolor/128x128/apps/clipboard.png"
+  - src: "./build/linux/clipboard.desktop"
+    dst: "/usr/share/applications/clipboard.desktop"
+
+# Default runtime dependencies for Debian 12 / Ubuntu 22.04+ (GTK3 / WebKit2GTK 4.1)
+depends:
+  - libgtk-3-0
+  - libwebkit2gtk-4.1-0
+
+overrides:
+  rpm:
+    depends:
+      - gtk3
+      - webkit2gtk4.1
+  archlinux:
+    depends:
+      - gtk3
+      - webkit2gtk-4.1
+
+scripts:
+  postinstall: "./build/linux/nfpm/scripts/postinstall.sh"
